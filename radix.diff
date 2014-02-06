@@ -1,0 +1,332 @@
+Only in py-radix: .gitignore
+diff -r -u py-radix-0.5/radix.c py-radix/radix.c
+--- py-radix-0.5/radix.c	2007-10-24 02:04:31.000000000 -0400
++++ py-radix/radix.c	2014-02-05 16:20:32.254589252 -0500
+@@ -328,6 +328,73 @@
+ }
+ 
+ 
++/* if inclusive != 0, "best" may be the given prefix itself */
++// Return array of all less specific radix nodes.
++int
++radix_stack (radix_tree_t *radix, prefix_t *prefix, int inclusive, 
++	     radix_node_t **final_stack)
++{
++	radix_node_t *node;
++	static radix_node_t *stack[RADIX_MAXBITS + 1];
++	u_char *addr;
++	u_int bitlen;
++	int cnt = 0;
++	int pass = 0;
++	int num_matched = 0;
++
++	if (radix->head == NULL)
++		return (NULL);
++
++	node = radix->head;
++	addr = prefix_touchar(prefix);
++	bitlen = prefix->bitlen;
++
++	while (node->bit < bitlen) {
++		if (node->prefix)
++			stack[cnt++] = node;
++		if (BIT_TEST(addr[node->bit >> 3], 0x80 >> (node->bit & 0x07)))
++			node = node->r;
++		else
++			node = node->l;
++
++		if (node == NULL)
++			break;
++	}
++
++	if (inclusive && node && node->prefix)
++		stack[cnt++] = node;
++
++	//printf("prefix is %s  %d\n", inet_ntoa(prefix->add.sin), prefix->bitlen);
++
++	if (cnt <= 0)
++		return (NULL);
++
++	//printf("here4\n");
++
++	while (--cnt >= 0) {
++		node = stack[cnt];
++		
++		if (!pass) {
++			if (!comp_with_mask(prefix_tochar(node->prefix),
++					    prefix_tochar(prefix), node->prefix->bitlen))
++				continue;
++			pass = 1;
++		}
++		
++		//printf("in loop %d\n", num_matched++);
++
++		if (node == NULL) {
++			printf("err, should not be null\n");
++		}
++		final_stack[num_matched] = node;
++		num_matched++;
++	}
++
++	//printf("about to return with %d\n", num_matched);
++	return (num_matched);
++}
++
++
+ radix_node_t
+ *radix_lookup(radix_tree_t *radix, prefix_t *prefix)
+ {
+diff -r -u py-radix-0.5/radix.h py-radix/radix.h
+--- py-radix-0.5/radix.h	2007-10-24 02:03:08.000000000 -0400
++++ py-radix/radix.h	2014-02-05 16:20:32.254589252 -0500
+@@ -124,6 +124,7 @@
+ radix_node_t *radix_search_exact(radix_tree_t *radix, prefix_t *prefix);
+ radix_node_t *radix_search_best(radix_tree_t *radix, prefix_t *prefix);
+ void radix_process(radix_tree_t *radix, rdx_cb_t func, void *cbctx);
++int radix_stack (radix_tree_t *radix, prefix_t *prefix, int inclusive, radix_node_t **final_stack);
+ 
+ #define RADIX_MAXBITS 128
+ 
+diff -r -u py-radix-0.5/radix_python.c py-radix/radix_python.c
+--- py-radix-0.5/radix_python.c	2007-12-17 21:49:01.000000000 -0500
++++ py-radix/radix_python.c	2014-02-05 16:20:32.254589252 -0500
+@@ -221,8 +221,23 @@
+ 	PyObject_Del(self);
+ }
+ 
++# if 0
++// IPv4 demo of inet_ntop() and inet_pton()
++
++struct sockaddr_in sa;
++char str[INET_ADDRSTRLEN];
++
++// store this IP address in sa:
++inet_pton(AF_INET, "192.0.2.33", &(sa.sin_addr));
++
++// now get it back and print it
++inet_ntop(AF_INET, &(sa.sin_addr), str, INET_ADDRSTRLEN);
++
++printf("%s\n", str); // prints "192.0.2.33"
++#endif
++
+ static prefix_t
+-*args_to_prefix(char *addr, char *packed, int packlen, long prefixlen)
++*args_to_prefix(char *addr, char *packed, int packlen, long prefixlen, char *family)
+ {
+ 	prefix_t *prefix = NULL;
+ 	const char *errmsg;
+@@ -239,7 +254,47 @@
+ 		return NULL;
+ 	}
+ 
+-	if (addr != NULL) {		/* Parse a string address */
++	// We can save a lot of work trying to guess family if told explicitly 
++	if ((addr != NULL) && (family != NULL)) {
++        int ipv4 = !strncmp(family, "ipv4", 4);
++        int ipv6 = !strncmp(family, "ipv6", 4);
++        if(!(ipv4 || ipv6))
++        {
++            PyErr_SetString(PyExc_TypeError,
++			    "Family must be ipv4 or ipv6");
++            return NULL;
++        }
++        int buflen = 4;
++        int domain = AF_INET;
++        if(ipv6)
++        {
++            buflen = 16;
++            domain = AF_INET6;
++        }
++
++        char *cp = NULL;
++        char *tmp = strdup(addr);
++        if ((cp = strchr(tmp, '/')) != NULL) {
++            *cp++ = '\0';
++            prefixlen = atoi(cp);
++        }
++        unsigned char buf[sizeof(struct in6_addr)];
++        int r = inet_pton(domain, tmp, buf);
++        if(r == 0) {
++            PyErr_SetString(PyExc_TypeError, "Not in presentation format");
++            free(tmp);
++            return NULL;
++        }
++        else if(r < 0) {
++            PyErr_SetString(PyExc_TypeError, "inet_pton failure");
++            free(tmp);
++            return NULL;
++        }
++
++        prefix = prefix_from_blob(buf, buflen, prefixlen);
++        free(tmp);
++	}
++	else if (addr != NULL) {		/* Parse a string address */
+ 		if ((prefix = prefix_pton(addr, prefixlen, &errmsg)) == NULL) {
+ 			PyErr_SetString(PyExc_ValueError, errmsg ? errmsg :
+ 			    "Invalid address format");
+@@ -251,6 +306,8 @@
+ 			    "Invalid packed address format");
+ 		}
+ 	}
++
++
+ 	if (prefix != NULL &&
+ 	    prefix->family != AF_INET && prefix->family != AF_INET6) {
+ 		Deref_Prefix(prefix);
+@@ -314,17 +371,17 @@
+ Radix_add(RadixObject *self, PyObject *args, PyObject *kw_args)
+ {
+ 	prefix_t *prefix;
+-	static char *keywords[] = { "network", "masklen", "packed", NULL };
++	static char *keywords[] = { "network", "masklen", "packed", "family", NULL};
+ 	PyObject *node_obj;
+ 
+-	char *addr = NULL, *packed = NULL;
++	char *addr = NULL, *packed = NULL, *family = NULL;
+ 	long prefixlen = -1;
+ 	int packlen = -1;
+ 
+-	if (!PyArg_ParseTupleAndKeywords(args, kw_args, "|sls#:add", keywords,
+-	    &addr, &prefixlen, &packed, &packlen))
++	if (!PyArg_ParseTupleAndKeywords(args, kw_args, "|sls#s:add", keywords,
++		 &addr, &prefixlen, &packed, &packlen, &family))
+ 		return NULL;
+-	if ((prefix = args_to_prefix(addr, packed, packlen, prefixlen)) == NULL)
++	if ((prefix = args_to_prefix(addr, packed, packlen, prefixlen, family)) == NULL)
+ 		return NULL;
+ 
+ 	node_obj = create_add_node(self, prefix);
+@@ -344,16 +401,16 @@
+ 	radix_node_t *node;
+ 	RadixNodeObject *node_obj;
+ 	prefix_t *prefix;
+-	static char *keywords[] = { "network", "masklen", "packed", NULL };
++	static char *keywords[] = { "network", "masklen", "packed", "family", NULL };
+ 
+-	char *addr = NULL, *packed = NULL;
++	char *addr = NULL, *packed = NULL, *family = NULL;
+ 	long prefixlen = -1;
+ 	int packlen = -1;
+ 
+-	if (!PyArg_ParseTupleAndKeywords(args, kw_args, "|sls#:delete", keywords,
+-	    &addr, &prefixlen, &packed, &packlen))
++	if (!PyArg_ParseTupleAndKeywords(args, kw_args, "|sls#s:delete", keywords,
++		 &addr, &prefixlen, &packed, &packlen, &family))
+ 		return NULL;
+-	if ((prefix = args_to_prefix(addr, packed, packlen, prefixlen)) == NULL)
++	if ((prefix = args_to_prefix(addr, packed, packlen, prefixlen, family)) == NULL)
+ 		return NULL;
+ 	if ((node = radix_search_exact(PICKRT(prefix, self), prefix)) == NULL) {
+ 		Deref_Prefix(prefix);
+@@ -389,16 +446,16 @@
+ 	radix_node_t *node;
+ 	RadixNodeObject *node_obj;
+ 	prefix_t *prefix;
+-	static char *keywords[] = { "network", "masklen", "packed", NULL };
++	static char *keywords[] = { "network", "masklen", "packed", "family", NULL };
+ 
+-	char *addr = NULL, *packed = NULL;
++	char *addr = NULL, *packed = NULL, *family = NULL;
+ 	long prefixlen = -1;
+ 	int packlen = -1;
+ 
+-	if (!PyArg_ParseTupleAndKeywords(args, kw_args, "|sls#:search_exact", keywords,
+-	    &addr, &prefixlen, &packed, &packlen))
++	if (!PyArg_ParseTupleAndKeywords(args, kw_args, "|sls#s:search_exact", keywords,
++		 &addr, &prefixlen, &packed, &packlen, &family))
+ 		return NULL;
+-	if ((prefix = args_to_prefix(addr, packed, packlen, prefixlen)) == NULL)
++	if ((prefix = args_to_prefix(addr, packed, packlen, prefixlen, family)) == NULL)
+ 		return NULL;
+ 
+ 	node = radix_search_exact(PICKRT(prefix, self), prefix);
+@@ -429,16 +486,16 @@
+ 	radix_node_t *node;
+ 	RadixNodeObject *node_obj;
+ 	prefix_t *prefix;
+-	static char *keywords[] = { "network", "masklen", "packed", NULL };
++	static char *keywords[] = { "network", "masklen", "packed", "family", NULL };
+ 
+-	char *addr = NULL, *packed = NULL;
++	char *addr = NULL, *packed = NULL, *family = NULL;
+ 	long prefixlen = -1;
+ 	int packlen = -1;
+ 
+-	if (!PyArg_ParseTupleAndKeywords(args, kw_args, "|sls#:search_best", keywords,
+-	    &addr, &prefixlen, &packed, &packlen))
++	if (!PyArg_ParseTupleAndKeywords(args, kw_args, "|sls#s:search_best", keywords,
++		 &addr, &prefixlen, &packed, &packlen, &family))
+ 		return NULL;
+-	if ((prefix = args_to_prefix(addr, packed, packlen, prefixlen)) == NULL)
++	if ((prefix = args_to_prefix(addr, packed, packlen, prefixlen, family)) == NULL)
+ 		return NULL;
+ 
+ 	if ((node = radix_search_best(PICKRT(prefix, self), prefix)) == NULL || 
+@@ -484,6 +541,59 @@
+ 	return (ret);
+ }
+ 
++
++PyDoc_STRVAR(Radix_stack_doc,
++"Radix.stack(prefix) -> List of prefix strings\n\
++\n\
++Returns a list nodes that much the prefix\n\
++This list may be empty if no prefixes have been\n");
++
++static PyObject *
++Radix_stack(RadixObject *self, PyObject *args, PyObject *kw_args)
++{
++	radix_node_t *node;
++	radix_node_t *final_stack[RADIX_MAXBITS + 1];
++	//RadixNodeObject *node_obj;
++	prefix_t *prefix;
++	static char *keywords[] = { "network", "masklen", "packed", "family", NULL };
++	int i, n;
++	PyObject *ret;
++
++	char *addr = NULL, *packed = NULL, *family = NULL;
++	long prefixlen = -1;
++	int packlen = -1;
++
++	if (!PyArg_ParseTupleAndKeywords(args, kw_args, "|sls#s:search_exact", keywords,
++		 &addr, &prefixlen, &packed, &packlen, &family))
++		return NULL;
++	if ((prefix = args_to_prefix(addr, packed, packlen, prefixlen, family)) == NULL)
++		return NULL;
++	
++	if ((ret = PyList_New(0)) == NULL)
++		return NULL;
++
++	n = radix_stack(PICKRT(prefix, self), prefix, 1, final_stack);
++	//printf("n = %d\n", n);
++
++	for (i=0; i < n; i++) {
++		if ((node = final_stack[i]) == NULL)
++			break;
++		
++		//printf("n=%d %d\n", n, i);
++
++		//if (node->data != NULL)
++		//printf("not null\n");
++		PyList_Append(ret, (PyObject *)node->data);
++	}
++
++	//node_obj = node->data;
++	//Py_XINCREF(node_obj);
++	//return (PyObject *)node_obj;
++
++	return (ret);
++}
++
++
+ PyDoc_STRVAR(Radix_prefixes_doc,
+ "Radix.prefixes(prefix) -> List of prefix strings\n\
+ \n\
+@@ -642,6 +752,7 @@
+ 	{"search_best",	(PyCFunction)Radix_search_best,	METH_VARARGS|METH_KEYWORDS,	Radix_search_best_doc	},
+ 	{"nodes",	(PyCFunction)Radix_nodes,	METH_VARARGS,			Radix_nodes_doc		},
+ 	{"prefixes",	(PyCFunction)Radix_prefixes,	METH_VARARGS,			Radix_prefixes_doc	},
++	{"stack",	(PyCFunction)Radix_stack,	METH_VARARGS|METH_KEYWORDS,	Radix_stack_doc		},
+ 	{"__getstate__",(PyCFunction)Radix_getstate,	METH_VARARGS,			NULL			},
+ 	{"__setstate__",(PyCFunction)Radix_setstate,	METH_VARARGS,			NULL			},
+ 	{"__reduce__",	(PyCFunction)Radix_reduce,	METH_VARARGS,			NULL			},
