@@ -221,21 +221,6 @@ Radix_dealloc(RadixObject *self)
 	PyObject_Del(self);
 }
 
-# if 0
-// IPv4 demo of inet_ntop() and inet_pton()
-
-struct sockaddr_in sa;
-char str[INET_ADDRSTRLEN];
-
-// store this IP address in sa:
-inet_pton(AF_INET, "192.0.2.33", &(sa.sin_addr));
-
-// now get it back and print it
-inet_ntop(AF_INET, &(sa.sin_addr), str, INET_ADDRSTRLEN);
-
-printf("%s\n", str); // prints "192.0.2.33"
-#endif
-
 static prefix_t
 *args_to_prefix(char *addr, char *packed, int packlen, long prefixlen, char *family)
 {
@@ -553,7 +538,6 @@ Radix_stack(RadixObject *self, PyObject *args, PyObject *kw_args)
 {
 	radix_node_t *node;
 	radix_node_t *final_stack[RADIX_MAXBITS + 1];
-	//RadixNodeObject *node_obj;
 	prefix_t *prefix;
 	static char *keywords[] = { "network", "masklen", "packed", "family", NULL };
 	int i, n;
@@ -573,22 +557,13 @@ Radix_stack(RadixObject *self, PyObject *args, PyObject *kw_args)
 		return NULL;
 
 	n = radix_stack(PICKRT(prefix, self), prefix, 1, final_stack);
-	//printf("n = %d\n", n);
 
 	for (i=0; i < n; i++) {
 		if ((node = final_stack[i]) == NULL)
 			break;
 		
-		//printf("n=%d %d\n", n, i);
-
-		//if (node->data != NULL)
-		//printf("not null\n");
 		PyList_Append(ret, (PyObject *)node->data);
 	}
-
-	//node_obj = node->data;
-	//Py_XINCREF(node_obj);
-	//return (PyObject *)node_obj;
 
 	return (ret);
 }

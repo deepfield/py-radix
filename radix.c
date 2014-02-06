@@ -364,12 +364,8 @@ radix_stack (radix_tree_t *radix, prefix_t *prefix, int inclusive,
 	if (inclusive && node && node->prefix)
 		stack[cnt++] = node;
 
-	//printf("prefix is %s  %d\n", inet_ntoa(prefix->add.sin), prefix->bitlen);
-
 	if (cnt <= 0)
 		return (NULL);
-
-	//printf("here4\n");
 
 	while (--cnt >= 0) {
 		node = stack[cnt];
@@ -381,8 +377,6 @@ radix_stack (radix_tree_t *radix, prefix_t *prefix, int inclusive,
 			pass = 1;
 		}
 		
-		//printf("in loop %d\n", num_matched++);
-
 		if (node == NULL) {
 			printf("err, should not be null\n");
 		}
@@ -390,7 +384,6 @@ radix_stack (radix_tree_t *radix, prefix_t *prefix, int inclusive,
 		num_matched++;
 	}
 
-	//printf("about to return with %d\n", num_matched);
 	return (num_matched);
 }
 
